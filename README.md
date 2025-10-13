@@ -1,0 +1,1 @@
+# Sablon-alapu-smart-fake
