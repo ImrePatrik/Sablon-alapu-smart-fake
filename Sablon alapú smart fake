@@ -1,0 +1,476 @@
+javascript:
+
+$.getScript('https://media.innogamescdn.com/com_DS_HU/scripts/supp_hotkeys.js');
+var form = $('#command-data-form').get(0);
+
+/*Smart Fake script*/
+
+// Ez most módosítható deklaráció: 
+let troopTemplate = {
+    spear: 10,
+    sword: 20,
+    archer: 15,
+    spy: 5,
+    light: 10,
+    heavy: 5,
+    ram: 3,
+    catapult: 2
+    // Itt kibővíthető a sablon a szerver egységeivel
+};
+
+//---------------------------------------
+// FUNCTIONS
+
+function getArrivalDate(urll) {
+    return new Promise((resolve, reject) => {
+        const cached = sessionStorage.getItem("smart_fake_date");
+        if (cached) {
+            let dates = cached.split(",");
+            let min = dates[0].split(':');
+            let max = dates[1].split(':');
+            let min_time = new Date(parseInt(min[0]), parseInt(min[1]) - 1, parseInt(min[2]), parseInt(min[3]), parseInt(min[4]), parseInt(min[5]), parseInt(min[6]));
+            let max_time = new Date(parseInt(max[0]), parseInt(max[1]) - 1, parseInt(max[2]), parseInt(max[3]), parseInt(max[4]), parseInt(max[5]), parseInt(max[6]));
+            resolve([min_time, max_time]);
+        } else {
+            $.ajax({
+                url: urll,
+                async: true,
+                success: function (result) {
+                    let dates = $(result).find(".post > .text").eq(0).text().match(/\d+:\d+:\d+:\d+:\d+:\d+:\d+/g);
+                    if (dates && dates.length >= 2) {
+                        sessionStorage.setItem("smart_fake_date", dates);
+                        let min = dates[0].split(':');
+                        let max = dates[1].split(':');
+                        let min_time = new Date(parseInt(min[0]), parseInt(min[1]) - 1, parseInt(min[2]), parseInt(min[3]), parseInt(min[4]), parseInt(min[5]), parseInt(min[6]));
+                        let max_time = new Date(parseInt(max[0]), parseInt(max[1]) - 1, parseInt(max[2]), parseInt(max[3]), parseInt(max[4]), parseInt(max[5]), parseInt(max[6]));
+                        resolve([min_time, max_time]);
+                    } else {
+                        reject("Invalid date data");
+                    }
+                },
+                error: function () {
+                    reject("Failed to load date data");
+                }
+            });
+        }
+    });
+}
+
+function getCoordsByUrl(urll) {
+    return new Promise((resolve, reject) => {
+        const cached = sessionStorage.getItem("smart_fake_coords");
+        if (cached) {
+            resolve(cached);
+        } else {
+            $.ajax({
+                url: urll,
+                async: true,
+                success: function (result) {
+                    let coords = $(result).find(".post > .text").eq(0).text().match(/\d+,\d+/g);
+                    if (coords && coords.length > 0) {
+                        for (var x = 0; x < coords.length; x++) {
+                            coords[x] = coords[x].replace(",", "|");
+                        }
+                        let joinedCoords = coords.join(" ");
+                        sessionStorage.setItem("smart_fake_coords", joinedCoords);
+                        resolve(joinedCoords);
+                    } else {
+                        reject("Invalid coords data");
+                    }
+                },
+                error: function () {
+                    reject("Failed to load coords data");
+                }
+            });
+        }
+    });
+}
+
+function fnAjaxRequest(url, sendMethod, params, type) {
+    var error = null, payload = null;
+
+    win.$.ajax({
+        "async": false,
+        "url": url,
+        "data": params,
+        "dataType": type,
+        "type": String(sendMethod || "GET").toUpperCase(),
+        "error": function (req, status, err) { error = "ajax: " + status; },
+        "success": function (data, status, req) { payload = data; }
+    });
+
+    if (error) {
+        throw (error);
+    }
+
+    return payload;
+}
+
+function fnCreateConfig(name) { return win.$(fnAjaxRequest("/interface.php", "GET", { "func": name }, "xml")).find("config"); }
+function fnCreateUnitConfig() { return fnCreateConfig("get_unit_info"); }
+
+function getSpeed(unit) {
+    return parseFloat(unitConfig.find(unit + " speed").text());
+}
+
+function getPop(unit) {
+    return parseFloat(unitConfig.find(unit + " pop").text());
+}
+
+function getBuildTime(unit) {
+    return parseFloat(unitConfig.find(unit + " build_time").text());
+}
+
+function currentCoord() {
+    return game_data.village.coord;
+}
+
+function distance(source, target) {
+    var fields = Math.sqrt(Math.pow(source[1] - target[1], 2) + Math.pow(source[0] - target[0], 2));
+    return fields;
+}
+
+function travelTime(source, target, unit) {
+    var unitSpeed = getSpeed(unit);
+    var fields = distance(source, target);
+    var tt = unitSpeed * fields;
+    return tt;
+}
+
+function addTime(date, time) {
+    var date_ms = date.getTime();
+    time = time * 1000 * 60;
+    newDate = date_ms + time;
+    newDate = new Date(newDate);
+    return newDate;
+}
+
+function getGoodCoords(coords, unit, minTime, maxTime) {
+    var goodCoords = [];
+    var servertime = window.$("#serverTime").html().match(/\d+/g);
+    var serverDate = win.$("#serverDate").html().match(/\d+/g);
+    serverTime = new Date(serverDate[1] + "/" + serverDate[0] + "/" + serverDate[2] + " " + servertime.join(":"));
+    coords = coords.split(' ');
+    var closest = 60 * 500;
+    var far = 0;
+
+    for (let i = 0; i < coords.length; i++) {
+        let coordsSplit = coords[i].split('|');
+        let travel = travelTime(coordsSplit, currentCoord().split("|"), unit);
+        let arrival = addTime(serverTime, travel);
+        if (travel < closest) {
+            closest = travel;
+        }
+        if (travel > far) {
+            far = travel;
+        }
+        if (arrival > minTime && arrival < maxTime) {
+            goodCoords.push(coords[i]);
+        }
+    }
+
+    if (goodCoords.length > 0) {
+        let index = Math.floor(Math.random() * goodCoords.length);
+        while (goodCoords.length > 0 && alreadySent(currentCoord(), goodCoords[index])) {
+            goodCoords.splice(index, 1);
+            index = Math.floor(Math.random() * goodCoords.length);
+        }
+        if (goodCoords.length > 0) {
+            fillInCoords(goodCoords[index]);
+            return goodCoords[index];
+        } else {
+            UI.ErrorMessage("Már minden fake kordira küldtél támadást, próbáld később vagy válts egység típusokat", 5000);
+            return null;
+        }
+    } else {
+        UI.ErrorMessage("Egy faluba se csapódnál a megadott idősáv között.\nEkkor futtasd a scriptet: " + addTime(minTime, (-1) * far).toString() + " és " + addTime(maxTime, (-1) * closest).toString(), 6000);
+        return null;
+    }
+}
+
+function fillInCoords(coords) {
+    let coordsSplit = coords.split('|');
+    form.x.value = coordsSplit[0];
+    form.y.value = coordsSplit[1];
+    $('#place_target').find('input').val(coordsSplit[0] + '|' + coordsSplit[1]);
+}
+
+function alreadySent(myCoords, target) {
+    if (sessionStorage.alreadySent) {
+        let history = JSON.parse(sessionStorage.alreadySent);
+        if (myCoords in history) {
+            if (history[myCoords].includes(target)) {
+                return true;
+            } else {
+                history[myCoords].push(target);
+                sessionStorage.alreadySent = JSON.stringify(history);
+                return false;
+            }
+        } else {
+            history[myCoords] = [target];
+            sessionStorage.alreadySent = JSON.stringify(history);
+            return false;
+        }
+    } else {
+        let history = {};
+        history[myCoords] = [target];
+        sessionStorage.alreadySent = JSON.stringify(history);
+        return false;
+    }
+}
+
+function fillInTroopsFromTemplate(troopCounts, template) {
+    let unitNames = Object.keys(template);
+    let anyUnitSet = false;
+    for (let i = 0; i < unitNames.length; i++) {
+        let unit = unitNames[i];
+        let countToSend = template[unit];
+        if (typeof troopCounts[unit] === "undefined") {
+            console.warn(`A '${unit}' egység nem található a szerveren.`);
+            continue;
+        }
+        if (troopCounts[unit] >= countToSend) {
+            form[unit].value = countToSend;
+            anyUnitSet = true;
+        } else {
+            form[unit].value = 0;
+            console.warn(`Nem áll rendelkezésre elég ${unit} egység a küldéshez (van: ${troopCounts[unit]}, kell: ${countToSend}).`);
+        }
+    }
+    if(!anyUnitSet){
+        alert("Nincsenek elegendő egységek a sablon alapján történő fakezéshez!");
+        return null;
+    }
+    return true;
+}
+
+function dateToIsoFormat(date) {
+    let offset = -(new Date().getTimezoneOffset() / 60);
+    date = new Date(date.getTime() + 1000 * 60 * 60 * offset);
+    return date.toISOString().split(".")[0];
+}
+
+function setManual() {
+    mode = "manual";
+    document.getElementById("coordsUrl").disabled = true;
+    document.getElementById("arrivalUrl").disabled = true;
+    document.getElementById("coords").disabled = false;
+    document.getElementById("minDate").disabled = false;
+    document.getElementById("maxDate").disabled = false;
+}
+
+function setByUrl() {
+    mode = "byUrl";
+    document.getElementById("coords").disabled = true;
+    document.getElementById("minDate").disabled = true;
+    document.getElementById("maxDate").disabled = true;
+    document.getElementById("coordsUrl").disabled = false;
+    document.getElementById("arrivalUrl").disabled = false;
+}
+
+function getCoords() {
+    coords = document.getElementById("coords").value.match(/\d\d\d\|\d\d\d/g);
+}
+
+function getCoordsUrl() {
+    coordsUrl = document.getElementById("coordsUrl").value;
+}
+
+function getArrival() {
+    minArrival = new Date(document.getElementById("minDate").value);
+    maxArrival = new Date(document.getElementById("maxDate").value);
+    document.getElementById("maxDate").min = document.getElementById("minDate").value;
+    document.getElementById("minDate").max = document.getElementById("minDate").value;
+}
+
+function getArrivalUrl() {
+    arrivalUrl = document.getElementById("arrivalUrl").value;
+}
+
+function saveSettings() {
+    if (minArrival > maxArrival) {
+        UI.ErrorMessage('Helytelen érkezési dátum', 5000);
+    }
+    else if (coords == null) {
+        UI.ErrorMessage('Legalább 1 koordinátát írj be', 5000);
+    }
+    else {
+        if (mode == "manual") {
+            localStorage.smartFakeSettings = mode + ":::" + coords + ":::" + minArrival + ":::" + maxArrival + ":::" + JSON.stringify(troopTemplate);
+        }
+        else {
+            localStorage.smartFakeSettings = mode + ":::" + coordsUrl + ":::" + arrivalUrl + ":::" + JSON.stringify(troopTemplate);
+        }
+        UI.SuccessMessage('Mentve', 3000);
+    }
+}
+
+function reset() {
+    localStorage.removeItem("smartFakeSettings");
+    coords = [];
+    coordsUrl = "";
+    minArrival = new Date();
+    maxArrival = new Date(minArrival.getTime() + 1000 * 60 * 60);
+    arrivalUrl = "";
+    troopTemplate = {};
+    mode = "manual";
+    openUI();
+}
+
+async function openUI() {
+    if (localStorage.smartFakeSettings) {
+        let savedSettings = localStorage.smartFakeSettings.split(":::");
+        if (savedSettings[0] == "manual") {
+            mode = savedSettings[0];
+            coords = savedSettings[1].replace(/,/g, " ");
+            minArrival = new Date(savedSettings[2]);
+            maxArrival = new Date(savedSettings[3]);
+            try {
+                troopTemplate = JSON.parse(savedSettings[4]);
+            } catch(e) {
+                console.warn("Troop template betöltése sikertelen");
+            }
+        } else {
+            mode = savedSettings[0];
+            coordsUrl = savedSettings[1];
+            arrivalUrl = savedSettings[2];
+            try {
+                troopTemplate = JSON.parse(savedSettings[3]);
+            } catch(e) {
+                console.warn("Troop template betöltése sikertelen");
+            }
+        }
+    }
+
+    let html = `
+        <head></head>
+        <body>
+            <h1>Smart fake script</h1>
+            <form>
+                <fieldset>
+                    <legend>A fakézés adatai</legend>
+                    <h2>Válassz adat forrást</h2>
+                    <p><input type="radio" id="manual" name="source" value="manual" ${mode === "manual" ? "checked" : ""} onchange="setManual()">Koordináták és érkezési idősávok manuális megadása</p>
+                    <p><input type="radio" id="tribe" name="source" value="url" ${mode === "byUrl" ? "checked" : ""} onchange="setByUrl()">Koordináták és érkezési idősávok beolvasása egy fórum témából</p>
+                </fieldset>
+
+                <fieldset>
+                    <legend>Manuális beállítások</legend>
+                    <p>
+                        <h2>Fake koordináták</h2>
+                        <label>Koordináták:</label>
+                        <textarea id="coords" rows="5" cols="70" placeholder="Illeszd be a koordinátákat. Pl: 111|222 888|555" onchange="getCoords()" ${mode !== "manual" ? "disabled" : ""}>${coords || ""}</textarea>
+                    </p>
+                    <p>
+                        <h2>Érkezési idősávok</h2>
+                        <label>A fake parancsok </label>
+                        <input type="datetime-local" id="minDate" value="${dateToIsoFormat(minArrival)}" onchange="getArrival()" ${mode !== "manual" ? "disabled" : ""}>
+                        <label> és </label>
+                        <input type="datetime-local" id="maxDate" value="${dateToIsoFormat(maxArrival)}" onchange="getArrival()" ${mode !== "manual" ? "disabled" : ""} >
+                        <label> között érkezzenek </label>
+                    </p>
+                </fieldset>
+
+                <fieldset>
+                    <legend>A fórum témák linkjei ahol az adatok megtalálhatók</legend>
+                    <p>
+                        <h2>Fake koordinátákhoz vezető link</h2>
+                        <label>Link: </label>
+                        <input type="text" id="coordsUrl" placeholder="https://..." onchange="getCoordsUrl()" ${mode !== "byUrl" ? "disabled" : ""} value="${coordsUrl || ""}">
+                    </p>
+                    <p>
+                        <h2>Érkezési idősávokhoz vezető link</h2>
+                        <label>Link: </label>
+                        <input type="text" id="arrivalUrl" placeholder="https://..." onchange="getArrivalUrl()" ${mode !== "byUrl" ? "disabled" : ""} value="${arrivalUrl || ""}">
+                    </p>
+                </fieldset>
+
+                <fieldset>
+                    <legend>Egység sablon (nem szerkeszthető a UI-ban, kód alapján módosítható)</legend>
+                    <p>Az egységek és darabszámok előre definiált sablon alapján kerülnek beállításra.</p>
+                </fieldset>
+
+                <p>
+                    <input type="button" class="btn evt-confirm-btn btn-confirm-yes" id="save" onclick="saveSettings()" value="Mentés">
+                    <input type="button" class="btn evt-confirm-btn btn-confirm-no" id="reset" onclick="reset()" value="Reset">
+                </p>
+            </form>
+        </body>`;
+
+    Dialog.show("Script settings", html);
+}
+
+async function main() {
+    if (game_data.screen == 'place') {
+        win = window;
+        unitConfig = fnCreateUnitConfig();
+
+        var troopCounts = {};
+        $('a[id^=units_entry_all_]').each(function (i, el) {
+            var id = $(el).attr('id');
+            var unit = id.match(/units_entry_all_(\w+)/)[1];
+            var count = $(el).text();
+            count = count.match(/\((\d+)\)/)[1];
+            troopCounts[unit] = parseInt(count);
+        });
+
+        if (localStorage.smartFakeSettings) {
+            try {
+                let settings = localStorage.smartFakeSettings.split(":::");
+                let modeSetting = settings[0];
+                if (modeSetting == "manual") {
+                    coords = settings[1];
+                    minArrival = new Date(settings[2]);
+                    maxArrival = new Date(settings[3]);
+                    troopTemplate = JSON.parse(settings[4]);
+                }
+                else if (modeSetting == "byUrl") {
+                    coords = await getCoordsByUrl(settings[1]);
+                    let dates = await getArrivalDate(settings[2]);
+                    minArrival = dates[0];
+                    maxArrival = dates[1];
+                    troopTemplate = JSON.parse(settings[3]);
+                }
+
+                let fillResult = fillInTroopsFromTemplate(troopCounts, troopTemplate);
+                if (fillResult !== null) {
+                    let slowestKey = Object.keys(troopTemplate).reduce((slowest, unit) => {
+                        if (troopTemplate[unit] > 0) {
+                            return (getSpeed(unit) < getSpeed(slowest)) ? unit : slowest;
+                        } else {
+                            return slowest;
+                        }
+                    }, Object.keys(troopTemplate)[0]);
+
+                    let target = getGoodCoords(coords, slowestKey, minArrival, maxArrival);
+                }
+
+            } catch (e) {
+                console.error("Hiba a beállítások olvasásakor vagy a koordináták betöltésekor:", e);
+                openUI();
+            }
+        }
+        else {
+            coords = [];
+            coordsUrl = "";
+            minArrival = new Date();
+            maxArrival = new Date(minArrival.getTime() + 1000 * 60 * 60);
+            arrivalUrl = "";
+            troopTemplate = {};
+            mode = "manual";
+            openUI();
+        }
+    }
+    else {
+        coords = [];
+        coordsUrl = "";
+        minArrival = new Date();
+        maxArrival = new Date(minArrival.getTime() + 1000 * 60 * 60);
+        arrivalUrl = "";
+        troopTemplate = {};
+        mode = "manual";
+        openUI();
+    }
+}
+
+main();
