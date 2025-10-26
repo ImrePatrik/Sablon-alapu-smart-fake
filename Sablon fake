@@ -1,6 +1,18 @@
 //Készítette: Patika30
 
 (function() {
+    // ---- Átirányítás Gyülekezőhelyre, ha nem ott vagy ----
+    if (!/screen=place\b/.test(window.location.search)) {
+        var base = window.location.origin + window.location.pathname;
+        var params = new URLSearchParams(window.location.search);
+        params.set('screen', 'place');
+        // Ha van village paraméter, megtartjuk!
+        if (!params.has('village') && typeof game_data !== 'undefined' && game_data.village) {
+            params.set('village', game_data.village.id);
+        }
+        window.location.search = params.toString();
+        return;
+    }
     // ---- UI Setup (KH design & footer) ----
     var old = document.getElementById('kh-draggable-ui');
     if (old) old.remove();
